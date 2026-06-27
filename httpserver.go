@@ -1,10 +1,12 @@
-// Package httpserver provides a small HTTP server with graceful-shutdown
-// lifecycle management.
+// Package httpserver provides a small HTTP server with context-driven
+// graceful-shutdown lifecycle management.
 //
-// It owns the start/stop machinery — listen, signal-aware shutdown, and the
-// start/shutdown error contract — and nothing else: the caller supplies the
-// http.Handler. It holds no CLI or orchestration logic and is reusable by any
-// service that needs to serve HTTP and stop cleanly.
+// It owns the start/stop machinery — listen, context-cancellation shutdown,
+// and the start/shutdown error contract — and nothing else: the caller
+// supplies the http.Handler and wires the cancellation (typically via
+// signal.NotifyContext), passing the resulting context to Serve. It holds no
+// CLI or orchestration logic and is reusable by any service that needs to
+// serve HTTP and stop cleanly.
 package httpserver
 
 import (
@@ -12,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -54,8 +57,13 @@ func (s *Server) Handler() http.Handler { return s.http.Handler }
 func (s *Server) Addr() string { return s.http.Addr }
 
 // Serve starts the server and blocks until ctx is cancelled or startup fails,
-// then shuts down gracefully within timeout.
+// then shuts down gracefully within timeout. Request contexts derive from ctx
+// (via http.Server.BaseContext), so they observe the same lifecycle
+// cancellation. When ctx is cancelled, a pending startup failure is preferred
+// over reporting a clean shutdown, so a real error is never masked.
 func (s *Server) Serve(ctx context.Context, timeout time.Duration) error {
+	s.http.BaseContext = func(net.Listener) context.Context { return ctx }
+
 	errs := make(chan error, 1)
 	go s.listen(errs)
 
@@ -63,21 +71,29 @@ func (s *Server) Serve(ctx context.Context, timeout time.Duration) error {
 	case err := <-errs:
 		return err
 	case <-ctx.Done():
-		return s.shutdown(timeout)
+		return s.stop(timeout, errs)
 	}
 }
 
-// listen runs ListenAndServe, reporting any non-shutdown startup error.
+// listen runs ListenAndServe and reports its terminal result exactly once,
+// translating a non-shutdown failure into ErrServerStart and a clean close
+// into nil. The single send lets Serve join this goroutine.
 func (s *Server) listen(errs chan<- error) {
 	s.logger.Info("Server starting.", "address", s.http.Addr)
-	if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		errs <- ErrServerStart.With(err)
-	}
+	errs <- startError(s.http.ListenAndServe())
+}
+
+// stop shuts the server down, then joins the listen goroutine by receiving its
+// terminal result. A pending startup error is preferred over the shutdown
+// outcome so a real failure is never masked by a clean shutdown.
+func (s *Server) stop(timeout time.Duration, errs <-chan error) error {
+	shutdownErr := s.shutdown(timeout)
+	return chooseError(<-errs, shutdownErr)
 }
 
 // shutdown attempts a graceful shutdown bounded by timeout.
 func (s *Server) shutdown(timeout time.Duration) error {
-	s.logger.Info("Shutdown signal received, starting graceful shutdown.")
+	s.logger.Info("Context cancelled, starting graceful shutdown.")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := s.http.Shutdown(ctx); err != nil {
@@ -85,6 +101,25 @@ func (s *Server) shutdown(timeout time.Duration) error {
 	}
 	s.logger.Info("Server stopped gracefully.")
 	return nil
+}
+
+// startError translates a ListenAndServe result into the package contract: a
+// clean shutdown (http.ErrServerClosed) is success; anything else is a wrapped
+// ErrServerStart.
+func startError(err error) error {
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return ErrServerStart.With(err)
+	}
+	return nil
+}
+
+// chooseError prefers a startup error over a shutdown error, so a real startup
+// failure is never masked by a clean (or merely slower) shutdown.
+func chooseError(startErr, shutdownErr error) error {
+	if startErr != nil {
+		return startErr
+	}
+	return shutdownErr
 }
 
 // address formats host and port as a listen address.

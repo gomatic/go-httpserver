@@ -91,3 +91,15 @@ func TestServe_ShutdownError(t *testing.T) {
 	must.Error(err)
 	want.ErrorIs(err, ErrServerShutdown)
 }
+
+func TestChooseError(t *testing.T) {
+	t.Parallel()
+	want := assert.New(t)
+
+	// A startup error is preferred over any shutdown outcome.
+	want.ErrorIs(chooseError(ErrServerStart, nil), ErrServerStart)
+	want.ErrorIs(chooseError(ErrServerStart, ErrServerShutdown), ErrServerStart)
+	// Absent a startup error, the shutdown outcome is reported.
+	want.ErrorIs(chooseError(nil, ErrServerShutdown), ErrServerShutdown)
+	want.NoError(chooseError(nil, nil))
+}
