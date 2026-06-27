@@ -3,7 +3,7 @@ module github.com/gomatic/go-httpserver
 go 1.26.4
 
 require (
-	github.com/gomatic/go-error v0.1.0
+	github.com/gomatic/go-error v0.2.2
 	github.com/stretchr/testify v1.11.1
 )
 
