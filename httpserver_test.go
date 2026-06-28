@@ -22,16 +22,6 @@ func testHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 }
 
-func TestNew(t *testing.T) {
-	t.Parallel()
-	want := assert.New(t)
-
-	h := testHandler()
-	srv := New(testLogger(), "127.0.0.1", 8080, h)
-	want.Equal("127.0.0.1:8080", srv.Addr())
-	want.NotNil(srv.Handler())
-}
-
 func TestServe_GracefulShutdown(t *testing.T) {
 	t.Parallel()
 	want, must := assert.New(t), require.New(t)

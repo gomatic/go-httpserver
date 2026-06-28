@@ -50,12 +50,6 @@ func New(logger *slog.Logger, host Host, port Port, handler http.Handler) *Serve
 	}
 }
 
-// Handler returns the server's HTTP handler.
-func (s *Server) Handler() http.Handler { return s.http.Handler }
-
-// Addr returns the configured listen address.
-func (s *Server) Addr() string { return s.http.Addr }
-
 // Serve starts the server and blocks until ctx is cancelled or startup fails,
 // then shuts down gracefully within timeout. Request contexts derive from ctx
 // (via http.Server.BaseContext), so they observe the same lifecycle
