@@ -26,8 +26,9 @@ type (
 	Port int
 )
 
-// Server wraps an *http.Server with lifecycle management. It uses a pointer
-// receiver because it owns non-copyable server machinery.
+// Server wraps an *http.Server with lifecycle management. It is a value type:
+// the non-copyable server machinery lives behind the http pointer field, so
+// copies share the same underlying server.
 type Server struct {
 	http   *http.Server
 	logger *slog.Logger
@@ -39,8 +40,8 @@ type Server struct {
 const readHeaderTimeout = 10 * time.Second
 
 // New builds a Server bound to host:port serving the supplied handler.
-func New(logger *slog.Logger, host Host, port Port, handler http.Handler) *Server {
-	return &Server{
+func New(logger *slog.Logger, host Host, port Port, handler http.Handler) Server {
+	return Server{
 		http: &http.Server{
 			Addr:              address(host, port),
 			Handler:           handler,
@@ -55,7 +56,7 @@ func New(logger *slog.Logger, host Host, port Port, handler http.Handler) *Serve
 // (via http.Server.BaseContext), so they observe the same lifecycle
 // cancellation. When ctx is cancelled, a pending startup failure is preferred
 // over reporting a clean shutdown, so a real error is never masked.
-func (s *Server) Serve(ctx context.Context, timeout time.Duration) error {
+func (s Server) Serve(ctx context.Context, timeout time.Duration) error {
 	s.http.BaseContext = func(net.Listener) context.Context { return ctx }
 
 	errs := make(chan error, 1)
