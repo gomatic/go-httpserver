@@ -72,7 +72,7 @@ func (s *Server) Serve(ctx context.Context, timeout time.Duration) error {
 // listen runs ListenAndServe and reports its terminal result exactly once,
 // translating a non-shutdown failure into ErrServerStart and a clean close
 // into nil. The single send lets Serve join this goroutine.
-func (s *Server) listen(errs chan<- error) {
+func (s Server) listen(errs chan<- error) {
 	s.logger.Info("Server starting.", "address", s.http.Addr)
 	errs <- startError(s.http.ListenAndServe())
 }
@@ -80,13 +80,13 @@ func (s *Server) listen(errs chan<- error) {
 // stop shuts the server down, then joins the listen goroutine by receiving its
 // terminal result. A pending startup error is preferred over the shutdown
 // outcome so a real failure is never masked by a clean shutdown.
-func (s *Server) stop(timeout time.Duration, errs <-chan error) error {
+func (s Server) stop(timeout time.Duration, errs <-chan error) error {
 	shutdownErr := s.shutdown(timeout)
 	return chooseError(<-errs, shutdownErr)
 }
 
 // shutdown attempts a graceful shutdown bounded by timeout.
-func (s *Server) shutdown(timeout time.Duration) error {
+func (s Server) shutdown(timeout time.Duration) error {
 	s.logger.Info("Context cancelled, starting graceful shutdown.")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
