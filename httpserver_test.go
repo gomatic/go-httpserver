@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -93,3 +94,62 @@ func TestChooseError(t *testing.T) {
 	want.ErrorIs(chooseError(nil, ErrServerShutdown), ErrServerShutdown)
 	want.NoError(chooseError(nil, nil))
 }
+
+// TestListenReportsItsTerminalResultExactlyOnce names listen's claim. Serve
+// joins the listen goroutine by RECEIVING from this channel, so the count is
+// load-bearing in both directions: sending nothing deadlocks Serve on shutdown,
+// and sending twice leaks a goroutine blocked on a send nobody will ever
+// receive — a leak per server lifetime, invisible until a long-running process
+// exhausts something.
+//
+// The translation is the other half: a clean close (http.ErrServerClosed) is
+// NOT a failure, and reporting it as one would make every graceful shutdown
+// look like a crashed server.
+func TestListenReportsItsTerminalResultExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		in      error
+		wantErr error
+		name    string
+	}{
+		{name: "a clean close is not a failure", in: http.ErrServerClosed, wantErr: nil},
+		{name: "no error is not a failure", in: nil, wantErr: nil},
+		{name: "a real failure becomes ErrServerStart", in: errBoom, wantErr: ErrServerStart},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := startError(tc.in)
+			if tc.wantErr == nil {
+				assert.NoError(t, got)
+				return
+			}
+			assert.ErrorIs(t, got, tc.wantErr)
+			assert.ErrorIs(t, got, tc.in, "the cause must stay reachable")
+		})
+	}
+}
+
+// TestStopPrefersAStartupFailureOverAShutdownOutcome names stop's and
+// chooseError's claim. A server that failed to bind its port still gets shut
+// down, and the shutdown will usually succeed — so returning the shutdown
+// outcome would report success for a server that never started. The startup
+// error wins whenever there is one.
+func TestStopPrefersAStartupFailureOverAShutdownOutcome(t *testing.T) {
+	t.Parallel()
+
+	startFailed := ErrServerStart.With(errBoom)
+	shutdownFailed := ErrServerShutdown.With(errBoom)
+
+	assert.ErrorIs(t, chooseError(startFailed, nil), ErrServerStart,
+		"a startup failure with a clean shutdown must still report the startup failure")
+	assert.ErrorIs(t, chooseError(startFailed, shutdownFailed), ErrServerStart,
+		"and must not be masked when the shutdown also failed")
+	assert.ErrorIs(t, chooseError(nil, shutdownFailed), ErrServerShutdown,
+		"with no startup failure, the shutdown outcome is the answer")
+	assert.NoError(t, chooseError(nil, nil), "a clean run reports nothing")
+}
+
+// errBoom is an arbitrary underlying failure, used to prove a cause stays
+// reachable through the sentinels.
+var errBoom = errors.New("boom")
